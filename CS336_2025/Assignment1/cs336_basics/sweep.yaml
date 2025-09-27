@@ -1,0 +1,15 @@
+program: train.py
+method: bayes
+metric:
+  name: Validation Loss
+  goal: minimize
+
+parameters:
+  lr_max:
+    distribution: log_uniform_values
+    min: 0.0001      # 1e-4
+    max: 0.001       # 1e-3
+  lr_min:
+    distribution: log_uniform_values
+    min: 0.000001     # 1e-6
+    max: 0.00001       # 1e-5
