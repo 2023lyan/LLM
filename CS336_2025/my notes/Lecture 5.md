@@ -1,56 +1,125 @@
 # Lecture 5: GPU
 
-Anatomy of a GPU: 
-GPU has many SM (streaming multiprocessors)
-Each SM has many SP (streaming processors)
-The closer the memory to the SM, the faster it is.
-L1 and shared memory is inside the SM. L2 cache is on die, and global memory are the memory chips next to the GPU.
+## Anatomy of a GPU
 
-Execution model of a GPU:
-Threads: Threads "do the work" in parallel, SIMT (same instruction multiple threads)
-Blocks: Blocks are groups of threads. Each block runs on a SM and can share memory.
-Warps: Threads always execute in a "warp" of 32 consecutively numbered threads each.
+* A GPU has many **SMs (Streaming Multiprocessors)**.
+* Each SM has many **SPs (Streaming Processors / CUDA cores)**.
+* **Memory hierarchy**: the closer to the SM, the faster.
 
-Memory model of a GPU:
-Shared memory: shared among threads in a block, very fast.
-Register: private to each thread, very fast.
-Local memory: private to each thread, but stored in global memory, very slow.
-Global memory: accessible by all threads, very slow.
-Constant memory: read-only memory, cached, faster than global memory.
+  * **Registers, shared memory, L1 cache**: inside the SM, very fast.
+  * **L2 cache**: on die, shared across SMs.
+  * **Global memory (DRAM, e.g. GDDR/HBM)**: off-chip, very large but very slow.
 
-Compute scaling is faster than memory scaling, so the bottleneck is often memory bandwidth.
+---
 
-What makes ML workloads fast?
-1. Control divergence: Avoid if-else statements that cause threads in a warp to take different paths.
-2. Low precision: Low precision improves arithmetic intensity.
-3. Operator fusion to minimize memory access
-4. recomputation: compute more to reduce memory access, for example, recompute activations during backpropagation instead of storing them.
+## Execution model
 
-5. Memory coalescing and DRAM:
-DRAM is the global memory, and it read data of the "burst mode", which will read a chunk of data from the aligned address, but not the only one data you want. 
-Memory accesses are *coalesced* if all the threads in a warp fall within the same burst section.
-Example: matrix multiplication C = A * B, A, B and C are all stored in row-major order. If we comput each C[i][j] row by row, then each thread in a warp will access the same row of A, but different columns of B, which are coalesced. But if we compute C column by column, then each thread in a warp will access the same column of B, which are not coalesced.
-6. Tiling(most important): group and order threads to minimize global memory access.
-For example, matrix multiplication C = A * B, we tile the matrices into smaller blocks, and put the blocks to different SMs to get the partial sum of the result. This will reduce the number of accesses to global memory, and increase the use of shared memory.
+* **Threads**: smallest execution unit, run in SIMT (same instruction, multiple threads).
+* **Block**: a group of threads. Each block runs on one SM and has access to shared memory.
+* **Warp**: 32 consecutive threads that always execute in lockstep.
 
-Summary of methods:
-1. Reduce memory accesses
-- Coalescing
-- Fusion
+---
 
-2. Move memory to shared memory
-- Tiling
+## Memory model
 
-3. Trade memory for computation
-- Quantization
-- Recomputation
+* **Registers**: private to each thread, fastest storage.
+* **Shared memory**: shared among threads in a block, very fast (on-chip SRAM).
+* **Local memory**: private to each thread but allocated in global memory if registers spill → as slow as global memory.
+* **Global memory (DRAM)**: accessible by all threads, very high latency.
+* **Constant memory**: read-only, cached, faster than global memory for broadcast.
 
-FlashAttention:
-First, use tiling method to comput QK^T in tiles, and store the intermediate results in shared memory.
-Second, use the online softmax method to compute the softmax in the tiles which used in computing the multiplication of matrix Q and K.
-Online softmax:
-m_i = max(m_{i-1}, x_i)
-d_i = d_{i-1} * exp(m_{i-1} - m_i) + exp(x_i - m_i)
+⚠️ Local memory is not a separate physical memory—it’s just global memory used for thread-private data when registers are insufficient.
 
-y_i = exp(x_i - m_V) / d_V
-where m_i is the maximum value of the first i elements, d_i is the sum of the exponentials of the first i elements, and y_i is the softmax output of the i-th element.
+---
+
+## Compute vs Memory
+
+* Compute throughput has been scaling faster than memory bandwidth.
+* Result: memory bandwidth is often the bottleneck for GPU workloads.
+
+---
+
+## Making ML workloads fast
+
+1. **Control divergence**
+
+   * Avoid if/else that cause different threads in a warp to take different execution paths → warps serialize, wasting parallelism.
+
+2. **Low precision**
+
+   * Using FP16 / INT8 reduces memory traffic and increases arithmetic intensity (FLOPs per byte).
+   * Modern GPUs have tensor cores optimized for low-precision matmuls.
+
+3. **Operator fusion**
+
+   * Fuse multiple elementwise ops into a single kernel to reduce round-trips to global memory.
+
+4. **Recomputation**
+
+   * Trade computation for memory.
+   * Example: in backpropagation, don’t store all activations—recompute them when needed.
+
+5. **Memory coalescing**
+
+   * DRAM is read in bursts (cache-line sized chunks).
+   * Memory accesses are *coalesced* if all 32 threads in a warp access addresses within the same burst.
+   * Example (row-major layout):
+
+     * Warp accessing **same row, different columns** → addresses contiguous → coalesced.
+     * Warp accessing **same column, different rows** → addresses strided by row width → not coalesced.
+
+6. **Tiling (the most important)**
+
+   * Split the output matrix **C** into tiles. Assign each tile to one block running on an SM.
+   * Each block loads corresponding tiles of A and B into shared memory.
+   * Perform partial sums inside shared memory (fast reuse) before moving on to the next tile.
+   * Reduces redundant global memory accesses and improves throughput.
+
+---
+
+## Summary of methods
+
+1. **Reduce memory accesses**
+
+   * Coalescing
+   * Fusion
+
+2. **Move memory to shared memory**
+
+   * Tiling
+
+3. **Trade memory for computation**
+
+   * Quantization (low precision)
+   * Recomputation
+
+---
+
+## FlashAttention
+
+### Key idea
+
+* Standard attention requires forming (QK^T), which is huge and cannot fit in memory.
+* FlashAttention avoids materializing the full matrix by **tiling + online softmax**.
+
+### Steps
+
+1. **Tiling**
+
+   * Load small tiles of (K, V) into shared memory.
+   * Compute partial products (S^{(t)} = QK^{(t)T}) tile by tile.
+
+2. **Online softmax**
+
+   * Maintain running maximum (m) and denominator (d).
+   * Update incrementally as new tiles are processed:
+     [
+     m_j = \max(m_{j-1}, x_j), \quad
+     d_j = d_{j-1} \cdot e^{m_{j-1} - m_j} + e^{x_j - m_j}
+     ]
+   * This allows computing the softmax tile-by-tile while staying numerically stable.
+
+3. **Accumulate outputs**
+
+   * For each tile, compute partial results (\text{softmax}(S^{(t)}) V^{(t)}).
+   * Combine them with the online softmax rescaling trick.
