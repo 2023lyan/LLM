@@ -1,75 +1,205 @@
 # Lecture 7: Parallelism 1
-All reduce = reduce-scatter + all-gather
 
-- All Reduce: A, B, C, D -> A+B+C+D, A+B+C+D, A+B+C+D, A+B+C+D
-- Reduce Scatter: (A0, A1, A2, A3), (B0, B1, B2, B3), (C0, C1, C2, C3), (D0, D1, D2, D3) -> (A0+B0+C0+D0, _, _, _), ( _, A1+B1+C1+D1, _, _), ( _, _, A2+B2+C2+D2, _), ( _, _, _, A3+B3+C3+D3)
-- All Gather: (A0+B0+C0+D0, _, _, _), ( _, A1+B1+C1+D1, _, _), ( _, _, A2+B2+C2+D2, _), ( _, _, _, A3+B3+C3+D3)
+---
 
-## Parallelism primitives
-- Data parallelism: Naive data parallelism, ZeRO(Zero Redundancy Optimizer) level 1-3
-- Model parallelism: Tensor parallelism, Pipeline parallelism
-- Activation parallelism: Sequence parallelism,
+## All-Reduce, Reduce-Scatter, All-Gather
 
-### Data parallelism
-- Naive data parallelism: divide batch(B data) into M parts, each GPU gets B/M data, each GPU has a full model replica, after backward do all-reduce to sync gradients. Only improves throughput(speed), not memory usage.
+**All-Reduce** can be decomposed as:
 
-- ZeRO:
-most of tne memory is used to store optimizer states, the core idea is to split up the expensivs parts(state) and use the reduce-scatter method.
+$$
+\text{All-Reduce} = \text{Reduce-Scatter} + \text{All-Gather}
+$$
 
-P_{os}: 2\phi + 2\phi + K\phi / N_d(to divide the optimizer states)
-P_{os+g}: 2\phi + 2\phi / N_d + K\phi / N_d (to divide the optimizer states and gradients)
-P_{os+g+p}: 2\phi / N_d + 2\phi / N_d + K\phi / N_d (to divide the optimizer states, gradients and parameters)
+- **All-Reduce:**  
+  $(A, B, C, D) \to (A+B+C+D,\; A+B+C+D,\; A+B+C+D,\; A+B+C+D)$
 
-Stage 1: only partition optimizer states
-- Step 1: each GPU computes gradients on its mini-batch
-- Step 2: Reduce-scatter gradients across GPUs
-- Step 3: Each GPU updates its partition of optimizer states and model parameters
-- Step 4: All-gather model parameters across GPUs
+- **Reduce-Scatter:**  
+  $$
+  (A_0, A_1, A_2, A_3),\; (B_0, B_1, B_2, B_3),\; (C_0, C_1, C_2, C_3),\; (D_0, D_1, D_2, D_3)
+  $$
+  $\Downarrow$
+  $$
+  (A_0+B_0+C_0+D_0,\_,\_,\_),\;
+  (\_,A_1+B_1+C_1+D_1,\_,\_),\;
+  (\_,\_,A_2+B_2+C_2+D_2,\_),\;
+  (\_,\_,\_,A_3+B_3+C_3+D_3)
+  $$
 
-Stage 2: partition optimizer states and gradients
-- Step 1: each GPU incrementally goes backward on the computation graph. After computing a layer's gradients, immediately reduce it to the right worker. Once gradients are not needed, free them.
-- Step 2: Each GPU updates its partition of optimizer states and model parameters
-- Step 3: All-gather model parameters across GPUs
+- **All-Gather:**  
+  $$
+  (A_0+B_0+C_0+D_0,\_,\_,\_),\;
+  (\_,A_1+B_1+C_1+D_1,\_,\_),\;
+  (\_,\_,A_2+B_2+C_2+D_2,\_),\;
+  (\_,\_,\_,A_3+B_3+C_3+D_3)
+  $$
 
-Stage 3: partition optimizer states, gradients and parameters (aka Fully Sharded Data Parallel, FSDP)
-- Parameters / gradients are requested / sent and then immediately freed
-- The all-gathers happen all at once while forward happens, masking the comm cost.
+---
 
-### Model parallelism
+## Parallelism Primitives
 
-- Layer-wise model parallelism: each layer is on a different GPU, only works for very large models, but low GPU utilization.
+- **Data Parallelism:**  
+  Naive Data Parallelism, ZeRO (Zero Redundancy Optimizer, Levels 1–3)
 
-- pipeline parallelism: Process 'micro-batches' to keep all GPUs busy. Ratio of bubble time to compute time = (number of stages - 1) / (number of micro-batches)
+- **Model Parallelism:**  
+  Tensor Parallelism, Pipeline Parallelism
 
-- Tensor parallelism: split the parameters of each matrix across multiple GPUs. 
+- **Activation Parallelism:**  
+  Sequence Parallelism
 
-Tensor parallelism vs Pipeline parallelism:
-Pros:
-- no bubble time
-Cons:
-- more communication cost
+---
 
-### Activation parallelism
-Activation memory needed per layer: sbh(34 + 5as/h)
-- a: number of attention heads
-- b: batch size
-- s: sequence length
-- h: hidden dimension
-- The 5as/h term comes from the attention term incl dropout
-- As with FlashAttention, we can omit this term via recomputation
+## Data Parallelism
 
-Activation memory needed per layer with tensor parallelism: sbh(10 + 24 / t + 5as/ht)
-- t: number of tensor parallelism GPUs
-- The remaining 10 term comes from LayerNorm(4sbh), Dropout(2sbh), and input to the mlp and attention (4sbh)
+### Naive Data Parallelism
 
-Sequence parallelism:
-- Split the sequence length across multiple GPUs
-- For tensor parallelism, we need to cut the hidden dimension, for sequence parallelism, we cut the sequence length
-- Split up the layer norm/dropout layers along the sequence axis.
+- Divide a batch of size $B$ into $M$ parts.  
+- Each GPU processes $\frac{B}{M}$ samples.  
+- Each GPU keeps a **full model replica**.  
+- After backward pass, perform **All-Reduce** to synchronize gradients.
 
-Activation memory needed per layer with sequence parallelism, tensor parallelism and recomputation: sbh(34 / t)
+✅ Improves **throughput** (speed)  
+❌ Does **not** reduce **memory usage**.
 
-Simple rules of thumb:
-1. Until your model fits in memory.
-2. Then until you run out of GPUs.
-3. Tensor parallel = 8 is often optimal
+---
+
+### ZeRO (Zero Redundancy Optimizer)
+
+Most of the memory is used for **optimizer states**.  
+The idea is to **partition expensive components** (states, gradients, parameters)  
+and use **Reduce-Scatter / All-Gather** for synchronization.
+
+#### Memory Partition Formulas
+
+Let:
+- $\phi$ = model parameter size
+- $K$ = optimizer state factor (e.g., 2 for Adam)
+- $N_d$ = number of devices (GPUs)
+
+Then:
+
+| Stage | Partitioned Items | Memory per Device |
+|--------|------------------|-------------------|
+| ZeRO-1 | Optimizer states | $P_{os} = 2\phi + 2\phi + \dfrac{K\phi}{N_d}$ |
+| ZeRO-2 | Optimizer states + Gradients | $P_{os+g} = 2\phi + \dfrac{2\phi}{N_d} + \dfrac{K\phi}{N_d}$ |
+| ZeRO-3 | Optimizer states + Gradients + Parameters | $P_{os+g+p} = \dfrac{2\phi}{N_d} + \dfrac{2\phi}{N_d} + \dfrac{K\phi}{N_d}$ |
+
+---
+
+### ZeRO Stage 1: Partition Optimizer States
+
+1. Each GPU computes gradients on its local mini-batch.  
+2. **Reduce-Scatter** gradients across GPUs.  
+3. Each GPU updates its partition of optimizer states and model parameters.  
+4. **All-Gather** model parameters across GPUs.
+
+---
+
+### ZeRO Stage 2: Partition Optimizer States and Gradients
+
+1. Each GPU performs backward incrementally.  
+   - After computing a layer’s gradient, immediately reduce it to the target GPU.  
+   - Free gradients once not needed.  
+2. Each GPU updates its partition of optimizer states and model parameters.  
+3. **All-Gather** parameters before forward.
+
+---
+
+### ZeRO Stage 3: Partition All (Optimizer States, Gradients, Parameters)
+
+Also known as **Fully Sharded Data Parallel (FSDP).**
+
+- Parameters and gradients are fetched and freed *on demand*.  
+- **All-Gathers** overlap with forward computation, hiding communication cost.
+
+---
+
+## Model Parallelism
+
+### Layer-wise Model Parallelism
+
+- Each layer resides on a different GPU.  
+- Works only for **very large models**, but results in **low GPU utilization**.
+
+---
+
+### Pipeline Parallelism
+
+Split the model into multiple *stages* and process *micro-batches* to keep all GPUs busy.
+
+Bubble (idle) time ratio:
+
+$$
+\frac{T_{\text{bubble}}}{T_{\text{compute}}} = \frac{N_{\text{stages}} - 1}{N_{\text{micro-batches}}}
+$$
+
+---
+
+### Tensor Parallelism
+
+Split **parameter tensors** (matrices) across multiple GPUs.
+
+**Comparison:**
+
+| Type | Pros | Cons |
+|------|------|------|
+| **Tensor Parallelism** | No bubble time | More communication |
+| **Pipeline Parallelism** | Less communication | Bubble time |
+
+---
+
+## Activation Parallelism
+
+### Activation Memory per Layer
+
+$$
+M_{\text{act}} = s b h (34 + \frac{5 a s}{h})
+$$
+
+where:  
+- $a$ = number of attention heads  
+- $b$ = batch size  
+- $s$ = sequence length  
+- $h$ = hidden dimension  
+
+The term $\frac{5 a s}{h}$ comes from the attention term (including dropout).  
+Like **FlashAttention**, we can eliminate this term via recomputation.
+
+---
+
+### With Tensor Parallelism
+
+$$
+M_{\text{act-tp}} = s b h \left( 10 + \frac{24}{t} + \frac{5 a s}{h t} \right)
+$$
+
+where $t$ = number of tensor-parallel GPUs.
+
+- The base `10` term comes from:
+  - LayerNorm: $4 s b h$
+  - Dropout: $2 s b h$
+  - Inputs to MLP + attention: $4 s b h$
+
+---
+
+### Sequence Parallelism
+
+- Split the **sequence length** across multiple GPUs (instead of hidden dimension).  
+- For Tensor Parallelism → split hidden dimension.  
+- For Sequence Parallelism → split sequence length.  
+- LayerNorm and Dropout layers are also split along the sequence axis.
+
+With sequence parallelism + tensor parallelism + recomputation:
+
+$$
+M_{\text{act-tp-sp}} = \frac{s b h (34)}{t}
+$$
+
+---
+
+## Rules of Thumb
+
+1. **Scale** until your model fits in memory.  
+2. Then **scale out** until you run out of GPUs.  
+3. Tensor Parallel degree $t = 8$ is often near-optimal.
+
+---

@@ -16,14 +16,14 @@ Warmup runs: First few runs may be slower due to caching, compilation, etc.
 - fusion: Combining multiple operations into a single kernel to reduce overhead.
 
 - CUDA kernel: CUDA is an extension of C/C++ with APIs for managing GPUs.
-Simplified picture: write f(i), CUDA kernel computes f(i) for all i.
+Simplified picture: write $f(i)$, CUDA kernel computes $f(i)$ for all $i$.
 
-- Grid: collection of thread blocks: numBlocks = (2, 4), blockDim = (1, 8)
+- Grid: collection of thread blocks: $numBlocks = (2, 4)$, $blockDim = (1, 8)$
 
-- Thread block: collection of threads: blockIdx = (0, 1)
-Thread: single unit of operation: threadIdx = (0, 3)
+- Thread block: collection of threads: $blockIdx = (0, 1)$
+Thread: single unit of operation: $threadIdx = (0, 3)$
 
-- The code uses (blockIdx, blockDim, threadIdx) to determine what to do.
+- The code uses (`blockIdx`, `blockDim`, `threadIdx`) to determine what to do.
 
 `os.environ["CUDA_LAUNCH_BLOCKING"] = "1"`: Make CUDA tell me what went wrong.
 

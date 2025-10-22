@@ -99,27 +99,29 @@
 
 ### Key idea
 
-* Standard attention requires forming (QK^T), which is huge and cannot fit in memory.
+* Standard attention requires forming $(QK^T)$, which is huge and cannot fit in memory.
 * FlashAttention avoids materializing the full matrix by **tiling + online softmax**.
 
 ### Steps
 
 1. **Tiling**
 
-   * Load small tiles of (K, V) into shared memory.
-   * Compute partial products (S^{(t)} = QK^{(t)T}) tile by tile.
+   * Load small tiles of ($K$, $V$) into shared memory.
+   * Compute partial products ($S^{(t)} = QK^{(t)T}$) tile by tile.
 
 2. **Online softmax**
 
-   * Maintain running maximum (m) and denominator (d).
+   * Maintain running maximum ($m$) and denominator ($d$).
    * Update incrementally as new tiles are processed:
-     [
+   $$
+     
      m_j = \max(m_{j-1}, x_j), \quad
      d_j = d_{j-1} \cdot e^{m_{j-1} - m_j} + e^{x_j - m_j}
-     ]
+     
+     $$
    * This allows computing the softmax tile-by-tile while staying numerically stable.
 
 3. **Accumulate outputs**
 
-   * For each tile, compute partial results (\text{softmax}(S^{(t)}) V^{(t)}).
+   * For each tile, compute partial results $\text{softmax}(S^{(t)}) V^{(t)}$.
    * Combine them with the online softmax rescaling trick.

@@ -1,67 +1,103 @@
 # Lecture 2: PyTorch, Resource Accounting
 
 ## Memory Accounting
-Tensors Memory:
-parameters, gradients, and optimizer states.
 
-float32: 32 bits (The default type in PyTorch)
-31: sign
-30-23: exponent
-22-0: fraction
+**Tensors Memory:**  
+Parameters, gradients, and optimizer states.
 
+---
+
+### Floating-Point Formats
+
+**float32:** 32 bits  
+- Bit layout:  
+  - Bit 31: sign  
+  - Bits 30–23: exponent  
+  - Bits 22–0: fraction  
+
+Each value occupies 32 bits = 4 bytes.  
 Memory is determined by:
-1. number of values
-2. data type of each value
+1. Number of values $N$
+2. Data type size (e.g., 4 bytes for float32)
 
-float16: 16 bits
-15: sign
-14-10: exponent
-9-0: fraction
+---
 
-Easy to be overflowed or underflowed.
+**float16:** 16 bits  
+- Bit 15: sign  
+- Bits 14–10: exponent  
+- Bits 9–0: fraction  
 
-bfloat16: 16 bits
-15: sign
-14-7: exponent
-6-0: fraction
-Larger exponent range than float16, but less resolution.
+→ Easy to overflow or underflow due to smaller exponent range.
 
-To get the information of a tensor:
+---
+
+**bfloat16:** 16 bits  
+- Bit 15: sign  
+- Bits 14–7: exponent  
+- Bits 6–0: fraction  
+
+Larger exponent range than float16, but less precision.
+
+---
+
+To get tensor data type info:
 ```python
 float32_info = torch.finfo(torch.float32)
 float16_info = torch.finfo(torch.float16)
 bfloat16_info = torch.finfo(torch.bfloat16)
-```
+````
 
-fp8: 8 bits
-7: sign
-6-4: exponent
-3-0: fraction
-very rough.
+---
 
-Training with float32, required lots of memory.
-Using float16 or bfloat16 can save memory and speed up training, but requires careful handling. It's instable for some models.
+**fp8:** 8 bits
+
+* Bit 7: sign
+* Bits 6–4: exponent
+* Bits 3–0: fraction
+
+Very rough and lossy.
+
+---
+
+Training with **float32** requires a lot of memory.
+Using **float16** or **bfloat16** can save memory and speed up training,
+but may be unstable for some models.
+
+---
 
 ## Compute Accounting
-By default, tensors are stored in CPU memory.
-To move a tensor to GPU:
 
-# Tensor Storage
-tonsors are pointers into allocated memory.
+By default, tensors are stored in **CPU memory**.
+To move a tensor to GPU, use:
 
-If we want to get a slice of a tensor without copying the data, we can use:
+```python
+tensor = tensor.to("cuda")
+```
+
+---
+
+## Tensor Storage
+
+Tensors are **pointers** into allocated memory.
+
+To get a slice of a tensor **without copying**:
+
 ```python
 tensor_slice = tensor[start:end]
 ```
 
-But if we want to create a new tensor with new memory allocation, we can use the contiguous method:
+To create a new tensor **with new memory allocation**:
+
 ```python
 new_tensor = tensor.contiguous()
 new_tensor[0] = 1.0
 assert tensor[0] != 1.0  
 ```
 
-# Matrix Multiplication
+---
+
+## Matrix Multiplication
+
 ```python
 x = torch.ones(4, 8, 16, 32)
 w = torch.ones(32, 2)
@@ -69,136 +105,228 @@ y = x @ w
 assert y.shape == (4, 8, 16, 2)
 ```
 
-For the tensor with more than 2 dimensions, the *last two* dimensions are used for matrix multiplication, and the rest are treated as batch dimensions.
+For tensors with more than 2 dimensions,
+the **last two** dimensions are used for matrix multiplication,
+and the rest are treated as batch dimensions.
 
-# Tensor Einops
+---
 
-Einops is a library for manipulating tensors where dimensions are named.
+## Tensor Einops
 
-for jaxtyping:
+**Einops** is a library for manipulating tensors with named dimensions.
+
+For **jaxtyping**:
+
 ```python
 x: Float[torch.Tensor, "batch seq dim"] = torch.ones(2, 2, 1, 3)
 ```
-this is just documentation, not enforcement.
 
-# Einops Einsum
+This is documentation-only — no runtime enforcement.
+
+---
+
+## Einops Einsum
+
 ```python
 x: Float[torch.Tensor, "batch seq1 hidden"] = torch.ones(2, 3, 4)
 y: Float[torch.Tensor, "batch seq2 hidden"] = torch.ones(2, 3, 4)
 # Old way
-z = x @ y.transpose(-1, -2) # Low readability because we don't know the meaning of dimensions.
-
+z = x @ y.transpose(-1, -2)
 # New way
 z = einsum(x, y, "batch seq1 hidden, batch seq2 hidden -> batch seq1 seq2")
-# This is more readable and clear.
 ```
 
-# Eisnop Reduce
+The new form is more readable and explicit.
+
+---
+
+## Einops Reduce
+
 ```python
 x: Float[torch.Tensor, "batch seq hidden"] = torch.ones(2, 3, 4)
 # Old way
-z = x.sum(dim=-1)  # Less readable, we don't know the meaning of
-# dimensions.
+z = x.sum(dim=-1)
 # New way
 z = reduce(x, "... hidden -> ...", "sum")
-# This is more readable and clear.
 ```
 
-# Einops Rearrange
+Readable and clear — indicates which dimension is reduced.
+
+---
+
+## Einops Rearrange
+
 ```python
 x: Float[torch.Tensor, "batch seq hidden"] = torch.ones(2, 3, 4)
+w: Float[torch.Tensor, "hidden1 hidden2"] = torch.ones(4, 4)
 
-w = Float[torch.Tensor, "hidden1 hidden2"] = torch.ones(4, 4)
-
-x = rearrange(x, "... (heads hidden1) -> ... heads hidden1", heads=2) # break the last dimension into two dimensions.
-x = einsum(x, w, "... hidden1, hidden1 hidden2 -> ... hidden2") 
-
-# We can also combine 2 dimensions into one:
+x = rearrange(x, "... (heads hidden1) -> ... heads hidden1", heads=2)
+x = einsum(x, w, "... hidden1, hidden1 hidden2 -> ... hidden2")
 x = rearrange(x, "... heads hidden1 -> ... (heads hidden1)")
 ```
 
-# Tensor Operations Flops
+* `rearrange`: splits or merges tensor dimensions flexibly.
 
-FLOPs: the number of floating-point operations per second.
+---
 
-FlOP/s: the number of floating-point operations per second.
+## Tensor Operations FLOPs
 
-They are 2 different concepts.
+**FLOPs:** Floating-point operations
+**FLOP/s:** Floating-point operations per second
 
-A100: 312 teraFLOP/s
+They are *different* concepts.
 
-(B, D) @ (D, K), flops = 2 * B * D * K, x[i][j], w[j][k], one multiplication and one addition to the total.
+---
 
-Matrix multiplication is the most expensive operation in deep learning, in general.
+### Example
 
-Forwoard pass: FlOPs = 2 (# tokens) * (# params)
+**A100 GPU:** 312 teraFLOP/s
 
-MFU(Model FLOPs Utilization): mfu = actual_flop/s / promised_flop/s
+For a matrix multiplication $(B, D) @ (D, K)$:
 
-FLOP/s depends on the hardware and data type. H100 >> A100, bfloat16 >> float32.
+$$
+\text{FLOPs} = 2 \times B \times D \times K
+$$
 
-Tensor Core of GPU: specialized hardware for matrix multiplication, can speed up training.
+Each output element does one multiplication and one addition.
 
-# Gradient FLOPs
+Matrix multiplication is the most expensive operation in deep learning.
+
+---
+
+### Forward Pass Estimate
+
+$$
+\text{FLOPs}_{\text{forward}} = 2 \times (\text{tokens}) \times (\text{params})
+$$
+
+---
+
+### Model FLOPs Utilization (MFU)
+
+$$
+\text{MFU} = \frac{\text{actual FLOP/s}}{\text{theoretical FLOP/s}}
+$$
+
+Higher is better.
+$\text{FLOP/s}$ depends on hardware and data type (e.g., H100 $\gg$ A100, bfloat16 $\gg$ float32).
+
+Tensor Cores are specialized GPU hardware for matrix multiplication.
+
+---
+
+## Gradient FLOPs
+
 For one token:
 
-num_forward_flops = 2 * (# params)
+$$
+\text{FLOPs}_{\text{forward}} = 2 \times (\text{params})
+$$
 
-num_backward_flops = 4 * (# params)
+$$
+\text{FLOPs}_{\text{backward}} = 4 \times (\text{params})
+$$
 
-Total FLOPs = 6 * (# params) * (# data points)
+Total:
 
-# Model Parameters
-w = nn.Parameter(torch.randn(input_dim, hidden_dim))
+$$
+\text{FLOPs}_{\text{total}} = 6 \times (\text{params}) \times (\text{data points})
+$$
 
-assert isinstance(w, torch.Tensor)
+---
 
-assert type(w.data) == torch.Tensor
+## Model Parameters
 
-# Parameter Initialization
-We want an initialization that is invariant to the hidden dimension. So we devide by the square root of the hidden dimension.
-
-# Note about Randomness
-For reproducibility, we can set the random seed differently for each time we use it.
 ```python
-# For PyTorch
+w = nn.Parameter(torch.randn(input_dim, hidden_dim))
+assert isinstance(w, torch.Tensor)
+assert type(w.data) == torch.Tensor
+```
+
+---
+
+## Parameter Initialization
+
+We want an initialization **invariant to hidden dimension**, so divide by its square root:
+
+$$
+w \sim \mathcal{N}!\left(0, \frac{1}{\sqrt{d_{\text{hidden}}}}\right)
+$$
+
+---
+
+## Randomness & Reproducibility
+
+Set random seeds to make runs reproducible:
+
+```python
 SEED = 42
 torch.manual_seed(SEED)
-
-# For NumPy
 np.random.seed(SEED)
-
-# For Python's random module
 random.seed(SEED)
 ```
 
-# Data Loading
-Don't load all data into memory at once, use memmap to lazily load only the accessed parts into memory.
+---
+
+## Data Loading
+
+Avoid loading all data into memory. Use **memory mapping**:
+
 ```python
 data = np.memmap("data.npy", dtype=np.float32, mode="r", shape=(num_samples, num_features))
-# mode: r is read-only, r+ is read/write, w+ is write (creates a new file if it doesn't exist), c is copy-on-write.
 ```
 
-# Optimizer
-AdaGrad:
-momentum: SGD + exponential averaging of gradients.
-AdaGrad: SGD + averaging by grad^2.
-RMSProp: AdaGrad + exponential averaging of grad^2
-Adam: RMSProp + momentum.
+Modes:
 
-# Memory
-num_params = (D * D * num_layers) + D
+* `"r"` → read-only
+* `"r+"` → read/write
+* `"w+"` → write (creates new file)
+* `"c"` → copy-on-write
 
-num_activations = B * D * num_layers
+---
 
-num_gradients = num_params
+## Optimizers
 
-num_optimizer_states = num_params
+| Optimizer    | Concept                                                 |
+| ------------ | ------------------------------------------------------- |
+| **SGD**      | gradient descent                                        |
+| **Momentum** | SGD + exponential moving average of gradients           |
+| **AdaGrad**  | SGD + divide by $\text{grad}^2$ (per-parameter scaling) |
+| **RMSProp**  | AdaGrad + exponential moving average of $\text{grad}^2$ |
+| **Adam**     | RMSProp + momentum                                      |
 
-total_memory = (num_params + num_activations + num_gradients + num_optimizer_states) * 4
+---
 
-# Checkpoint
-During training, the process can be interrupted, so we need to save the model state.
+## Memory Estimation
+
+$$
+\text{num\_params} = D^2 \cdot n_{\text{layers}} + D
+$$
+
+$$
+\text{num\_activations} = B \cdot D \cdot n_{\text{layers}}
+$$
+
+$$
+\text{num\_gradients} = \text{num\_params}
+$$
+
+$$
+\text{num\_optimizer\_states} = \text{num\_params}
+$$
+
+Total memory (in bytes, assuming 4 bytes per value):
+
+$$
+\text{total\_memory} = (\text{num\_params} + \text{num\_activations} + \text{num\_gradients} + \text{num\_optimizer\_states}) \times 4
+$$
+
+---
+
+## Checkpointing
+
+During training, save model and optimizer state to recover after interruption.
+
 ```python
 checkpoint = {
     "model": model.state_dict(),
@@ -207,10 +335,16 @@ checkpoint = {
 torch.save(checkpoint, "checkpoint.pth")
 ```
 
-# Mixed Precision Training
-Solution: Use float32 by default, but use {bfloat16, fp8} when possible.
+---
 
-A concrete plan:
-1. Use {bfloat16, fp8} for the forward pass (activation).
-2. Use float32 for the rest.
+## Mixed Precision Training
+
+**Idea:** Use `float32` by default, but `bfloat16` or `fp8` when possible.
+
+Plan:
+
+1. Use {`bfloat16`, `fp8`} for **forward pass (activations)**
+2. Use `float32` for **other computations**
+
+
 

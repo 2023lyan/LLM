@@ -1,16 +1,164 @@
 # Lecture 8: Parallelism 2
 
-## Collective operations: conceptual primitives used for distributed programming
-World Size: total number of devices
-Rank: unique ID for each device, from 0 to World Size - 1
-- Broadcast: Rank 0: t0 -> Rank 1: t0, Rank 2: t0, Rank 3: t0, Rank 4: t0
-- Scatter: Rank 0: (t0, t1, t2, t3) -> Rank 1: t0, Rank 2: t1, Rank 3: t2, Rank 4: t3
-- Gather: Rank 1: t0, Rank 2: t1, Rank 3: t2, Rank 4: t3 -> Rank 0: (t0, t1, t2, t3)
-- Reduce: Rank 1: t0, Rank 2: t1, Rank 3: t2, Rank 4: t3 -> Rank 0: t0+t1+t2+t3
-- All Gather: Rank 1: t0, Rank 2: t1, Rank 3: t2, Rank 4: t3 -> Rank 1: (t0, t1, t2, t3), Rank 2: (t0, t1, t2, t3), Rank 3: (t0, t1, t2, t3), Rank 4: (t0, t1, t2, t3)
-- All Reduce: Rank 1: t0, Rank 2: t1, Rank 3: t2, Rank 4: t3 -> Rank 1: t0+t1+t2+t3, Rank 2: t0+t1+t2+t3, Rank 3: t0+t1+t2+t3, Rank 4: t0+t1+t2+t3
-- Reduce Scatter: Rank 1: (a0, a1, a2, a3), Rank 2: (b0, b1, b2, b3), Rank 3: (c0, c1, c2, c3), Rank 4: (d0, d1, d2, d3) -> Rank 1: (a0+b0+c0+d0, _, _, _), Rank 2: ( _, a1+b1+c1+d1, _, _), Rank 3: ( _, _, a2+b2+c2+d2, _), Rank 4: ( _, _, _, a3+b3+c3+d3)
-All Reduce = Reduce Scatter + All Gather
+## Collective Operations
+
+Conceptual primitives used for **distributed programming**.
+
+---
+
+### Key Terms
+
+- **World Size** — total number of devices  
+  $$
+  \text{World Size} = N
+  $$
+
+- **Rank** — unique ID for each device  
+  $$
+  \text{Rank} \in \{0, 1, 2, \dots, N-1\}
+  $$
+
+---
+
+### Collective Communication Primitives
+
+#### 1. **Broadcast**
+
+Send one tensor from the root (usually rank 0) to all other devices:
+
+$$
+\text{Rank }0:\; t_0 \quad \Rightarrow \quad
+\text{Rank }1:t_0,\;
+\text{Rank }2:t_0,\;
+\text{Rank }3:t_0,\;
+\text{Rank }4:t_0
+$$
+
+---
+
+#### 2. **Scatter**
+
+Distribute parts of a tensor from rank 0 to all ranks:
+
+$$
+\text{Rank }0:\; (t_0, t_1, t_2, t_3)
+\quad \Rightarrow \quad
+\begin{cases}
+\text{Rank }1: t_0 \\
+\text{Rank }2: t_1 \\
+\text{Rank }3: t_2 \\
+\text{Rank }4: t_3
+\end{cases}
+$$
+
+---
+
+#### 3. **Gather**
+
+Collect tensors from all ranks to rank 0:
+
+$$
+\text{Rank }1:t_0,\;
+\text{Rank }2:t_1,\;
+\text{Rank }3:t_2,\;
+\text{Rank }4:t_3
+\quad \Rightarrow \quad
+\text{Rank }0:(t_0, t_1, t_2, t_3)
+$$
+
+---
+
+#### 4. **Reduce**
+
+Aggregate tensors from all ranks into one (e.g., by summation):
+
+$$
+\text{Rank }1:t_0,\;
+\text{Rank }2:t_1,\;
+\text{Rank }3:t_2,\;
+\text{Rank }4:t_3
+\quad \Rightarrow \quad
+\text{Rank }0:(t_0 + t_1 + t_2 + t_3)
+$$
+
+---
+
+#### 5. **All-Gather**
+
+Each rank gets the concatenated results from all ranks:
+
+$$
+\begin{aligned}
+\text{Input:} &\quad \text{Rank }1:t_0,\; \text{Rank }2:t_1,\; \text{Rank }3:t_2,\; \text{Rank }4:t_3 \\
+\text{Output:} &\quad \text{Each rank: } (t_0, t_1, t_2, t_3)
+\end{aligned}
+$$
+
+---
+
+#### 6. **All-Reduce**
+
+Each rank computes the reduced (e.g., summed) result of all tensors:
+
+$$
+\begin{aligned}
+\text{Input:} &\quad \text{Rank }1:t_0,\; \text{Rank }2:t_1,\; \text{Rank }3:t_2,\; \text{Rank }4:t_3 \\
+\text{Output:} &\quad \text{Each rank: } (t_0 + t_1 + t_2 + t_3)
+\end{aligned}
+$$
+
+---
+
+#### 7. **Reduce-Scatter**
+
+Each rank contributes partial tensors and keeps a shard of the reduced result:
+
+$$
+\begin{aligned}
+&\text{Rank }1:(a_0, a_1, a_2, a_3) \\
+&\text{Rank }2:(b_0, b_1, b_2, b_3) \\
+&\text{Rank }3:(c_0, c_1, c_2, c_3) \\
+&\text{Rank }4:(d_0, d_1, d_2, d_3)
+\end{aligned}
+$$
+
+After reduce-scatter:
+
+$$
+\begin{cases}
+\text{Rank }1: (a_0+b_0+c_0+d_0,\_,\_,\_) \\
+\text{Rank }2: (\_,a_1+b_1+c_1+d_1,\_,\_) \\
+\text{Rank }3: (\_,\_,a_2+b_2+c_2+d_2,\_) \\
+\text{Rank }4: (\_,\_,\_,a_3+b_3+c_3+d_3)
+\end{cases}
+$$
+
+---
+
+### Relationship Between Operations
+
+The **All-Reduce** operation can be expressed as:
+
+$$
+\text{All-Reduce} = \text{Reduce-Scatter} + \text{All-Gather}
+$$
+
+---
+
+**Summary Table**
+
+| Operation | Direction | Result at Each Rank | Purpose |
+|------------|------------|---------------------|----------|
+| **Broadcast** | One → All | Copy of root tensor | Synchronize data |
+| **Scatter** | One → All | Partitioned tensors | Distribute workload |
+| **Gather** | All → One | Concatenated tensor | Collect results |
+| **Reduce** | All → One | Aggregated tensor | Summation or averaging |
+| **All-Gather** | All ↔ All | Concatenated tensors everywhere | Share all data |
+| **All-Reduce** | All ↔ All | Aggregated tensor everywhere | Sync gradients |
+| **Reduce-Scatter** | All ↔ All | Partitioned reduced result | Efficient parallel reduction |
+
+---
+
 
 ## Torch distributed
 Classic:
