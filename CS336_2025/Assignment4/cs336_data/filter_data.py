@@ -78,7 +78,7 @@ def filter_data():
         num_bands=50,
         ngrams=5,
         jaccard_threshold=0.8,
-        output_directory=final_directory_path
+        output_directory=pathlib.Path(final_directory_path)
     )
     
 

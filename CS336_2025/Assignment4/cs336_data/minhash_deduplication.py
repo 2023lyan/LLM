@@ -96,6 +96,7 @@ def minhash_deduplication(
         "text": "",
         "signature": []
     }] * len(input_files)
+    os.makedirs(output_directory, exist_ok=True)
     buckets = defaultdict(list)
     random.seed(42)
     for idx, filepath in enumerate(input_files):
